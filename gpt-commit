@@ -1,0 +1,117 @@
+#!/usr/bin/env python
+import os
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List
+
+import requests
+
+
+@dataclass
+class CommandResult:
+    stdout: str
+    stderr: str
+    exit_code: int
+
+    @property
+    def ok(self):
+        return self.exit_code == 0
+
+
+def run_command(cmd: str) -> CommandResult:
+    process = subprocess.Popen(
+        cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    stdout, stderr = process.communicate()
+    stdout = stdout.decode("utf-8").strip()
+    stderr = stderr.decode("utf-8").strip()
+    exit_code = process.wait()
+
+    return CommandResult(stdout, stderr, exit_code)
+
+
+def get_commit_message(diff: str) -> str:
+    prompt = fetch_prompt()
+
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": "Bearer " + get_api_key(),
+    }
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {
+                "role": "system",
+                "content": prompt,
+            },
+            {
+                "role": "user",
+                "content": diff,
+            },
+        ],
+    }
+
+    response = requests.post(url, json=data, headers=headers)
+    if not response.ok:
+        raise RuntimeError(response.json()["error"]["message"])
+
+    return response.json()["choices"][0]["message"]["content"].strip()
+
+
+def commit_with_editor(message: str):
+    with tempfile.NamedTemporaryFile(
+        "wt", encoding="utf8", suffix="commit-message"
+    ) as f:
+        f.write(message + "\n")
+        f.flush()
+        os.system("git commit -t " + f.name)
+
+
+def get_api_key(key_name: str = "OPENAI_APIKEY") -> str:
+    with (Path().home() / ".env").open("rt", encoding="utf8") as f:
+        for line in f:
+            if line.strip() and not line.startswith("#"):
+                key, value = line.strip().split("=", 1)
+                if key == key_name:
+                    return value
+    raise RuntimeError(f"Cannot find {key_name} in ~/.env")
+
+
+def get_model_list() -> List[str]:
+    url = "https://api.openai.com/v1/models"
+    headers = {
+        "Authorization": "Bearer " + get_api_key(),
+    }
+    res = requests.get(url, headers=headers)
+    return [model["id"] for model in res.json()["data"]]
+
+
+def fetch_prompt() -> str:
+    file_path = Path().home() / ".config" / "acommit" / "prompt.txt"
+    if not file_path.exists():
+        print("No prompt file found. Creating one at ~/.config/acommit/prompt.txt")
+        default_prompt = "You are to act as the author of a commit message in git. Your mission is to create clean and comprehensive commit messages in the gitmoji convention with emoji and explain why a change was done. I'll send you an output of 'git diff --staged' command, and you convert it into a commit message. Add a short description of WHY the changes are done after the commit message. Don't start it with 'This commit', just describe the changes. Use the present tense. Commit title must not be longer than 74 characters."
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(default_prompt, encoding="utf8")
+        return default_prompt
+    else:
+        print("Using prompt from ~/.config/acommit/prompt.txt")
+        return file_path.read_text(encoding="utf8")
+
+
+def main():
+    command_result = run_command("git diff --staged")
+    if not command_result.ok:
+        print(command_result.stderr, file=sys.stderr)
+        sys.exit(1)
+
+    commit_message = get_commit_message(command_result.stdout)
+    commit_with_editor(commit_message)
+
+
+if __name__ == "__main__":
+    main()
