@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import argparse
 import os
 import subprocess
 import sys
@@ -8,6 +9,11 @@ from pathlib import Path
 from typing import List
 
 import requests
+
+
+# Create argument parser
+parser = argparse.ArgumentParser()
+parser.add_argument('-S', '--skip', help='Skip commit editor', action="store_true")
 
 
 @dataclass
@@ -62,13 +68,15 @@ def get_commit_message(diff: str) -> str:
     return response.json()["choices"][0]["message"]["content"].strip()
 
 
-def commit_with_editor(message: str):
+def commit_with_editor(message: str, skip_commit_editor: bool):
+    option = "-F" if skip_commit_editor else "-t"
+
     with tempfile.NamedTemporaryFile(
         "wt", encoding="utf8", suffix="commit-message"
     ) as f:
         f.write(message + "\n")
         f.flush()
-        os.system("git commit -t " + f.name)
+        os.system("git commit " + option + " " + f.name)
 
 
 def get_api_key(key_name: str = "OPENAI_APIKEY") -> str:
@@ -109,13 +117,16 @@ def fetch_prompt() -> str:
 
 
 def main():
+    args = parser.parse_args()
+    skip_commit_editor: bool = args.skip
+
     command_result = run_command("git diff --staged")
     if not command_result.ok:
         print(command_result.stderr, file=sys.stderr)
         sys.exit(1)
 
     commit_message = get_commit_message(command_result.stdout)
-    commit_with_editor(commit_message)
+    commit_with_editor(commit_message, skip_commit_editor)
 
 
 if __name__ == "__main__":
