@@ -72,12 +72,17 @@ def commit_with_editor(message: str):
 
 
 def get_api_key(key_name: str = "OPENAI_APIKEY") -> str:
+    api_key = os.environ.get(key_name)
+    if api_key:
+        return api_key
+
     with (Path().home() / ".env").open("rt", encoding="utf8") as f:
         for line in f:
             if line.strip() and not line.startswith("#"):
                 key, value = line.strip().split("=", 1)
                 if key == key_name:
                     return value
+
     raise RuntimeError(f"Cannot find {key_name} in ~/.env")
 
 
